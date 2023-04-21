@@ -4,8 +4,7 @@
 
 Tool to cluster and visualise contigs from a genome assembly using kmer frequencies
 
-
-### Dependencies
+### Dependencies
 
 - python
 	- biopython
