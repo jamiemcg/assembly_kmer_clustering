@@ -1,0 +1,10 @@
+name: assembly_kmer_composition
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - biopython
+  - tqdm
+  - r-base
+  - r-ggplot2
+  - r-umap
