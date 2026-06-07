@@ -1,97 +1,109 @@
 #!/usr/bin/env python
-
-import sys
-
-if len(sys.argv) < 4:
-    print("Usage: python kmer_composition.py [assembly.fasta] [kmer_length] [output_file]")
-    sys.exit(0)
+import argparse
 
 from Bio import SeqIO
 from tqdm import tqdm
-
-fasta_file = sys.argv[1]
-kmer_length = int(sys.argv[2])
-output_file = sys.argv[3]
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 forward = "ACGT"
 reverse = "TGCA"
 trans_table = str.maketrans(forward, reverse)
 
-# dict to store kmer counts per sequence
-kmer_counts = {}
 
-# set to store all observed kmers in any sequence
-all_kmers = set()
+def kmer_counter(args):
+    """Must be a top-level function to be picklable by multiprocessing."""
+    seq_id, seq, k = args
+    forward = "ACGT"
+    reverse = "TGCA"
+    trans_table = str.maketrans(forward, reverse)
+
+    l = len(seq)
+    if l < k:
+        return seq_id, {}, set()
+
+    counter = {}
+    local_kmers = set()
+
+    for i in range(l - k + 1):
+        kmer = seq[i:(i + k)]
+        if "N" in kmer:
+            continue
+        kmer_rev = kmer.translate(trans_table)[::-1]
+        if kmer > kmer_rev:
+            kmer = kmer_rev
+        local_kmers.add(kmer)
+        counter[kmer] = counter.get(kmer, 0) + 1
+
+    return seq_id, counter, local_kmers
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Calculate normalized canonical k-mer composition per sequence from a FASTA file."
+    )
+    parser.add_argument("-i", "--input", required=True, help="Input assembly FASTA file")
+    parser.add_argument("-o", "--output", required=True, help="Output TSV file path")
+    parser.add_argument("-k", "--kmer-size", dest="kmer_size", type=int, required=True, help="k-mer length")
+    parser.add_argument(
+        "-t",
+        "--threads",
+        type=int,
+        default=4,
+        help="Number of worker processes (default: 4)",
+    )
+    return parser.parse_args()
+
 
 def main():
-    print("Input file:", fasta_file)
-    
-    # count sequences for progress bar
-    n_sequences = 0
-    for record in SeqIO.parse(fasta_file, "fasta"):
-        n_sequences += 1
+    args = parse_args()
 
+    fasta_file = args.input
+    kmer_length = args.kmer_size
+    output_file = args.output
+    n_threads = args.threads
+
+    print("Input file:", fasta_file)
+    print("Workers:", n_threads)
+
+    print("Loading sequences...")
+    records = [(str(r.id), str(r.seq).upper()) for r in SeqIO.parse(fasta_file, "fasta")]
+    n_sequences = len(records)
     print(n_sequences, "sequences")
     print("Counting kmers of length", kmer_length)
 
-    progress = tqdm(total = n_sequences)
+    # Build args list for workers
+    args = [(seq_id, seq, kmer_length) for seq_id, seq in records]
 
-    for record in SeqIO.parse(fasta_file, "fasta"):
-        kmer_counts[str(record.id)] = kmer_counter(str(record.seq).upper(), kmer_length)
-        progress.update(1)
+    kmer_counts = {}
+    all_kmers = set()
 
-    progress.close()
+    with ProcessPoolExecutor(max_workers=n_threads) as executor:
+        futures = {executor.submit(kmer_counter, arg): arg[0] for arg in args}
+        for future in tqdm(as_completed(futures), total=n_sequences):
+            seq_id, counter, local_kmers = future.result()
+            if counter:
+                kmer_counts[seq_id] = counter
+                all_kmers.update(local_kmers)
 
     all_kmers_sorted = sorted(all_kmers)
-
     print("Writing results to:", output_file)
 
-    fo = open(output_file, "w")
+    seq_ids = []
+    X = []
 
-    line = "sequence_id\t" + "\t".join(all_kmers_sorted)
-    fo.write(line + "\n")
-
-    # print frequency table
-    for seq in kmer_counts:
-        line = []
-        
-        # count total number of kmers for sequence
-        total_kmers = sum(kmer_counts[seq].values())
-
-        for kmer in all_kmers_sorted:
-            if kmer in kmer_counts[seq]:
-                line.append(str(kmer_counts[seq][kmer] / total_kmers))
-            else:
-                line.append("0")
-       
-        fo.write(seq + "\t" +  "\t".join(line) + "\n")
-    
-def kmer_counter(seq, k):
-    l = len(seq)
-    counter = {}
-
-    if l < k:
-        return
-
-    for i in range(l - k + 1):
-        kmer = seq[i:(i+k)]
-
-        if "N" in kmer:
-            continue
-        
-        kmer_rev = kmer.translate(trans_table)[::-1]
-
-        if kmer > kmer_rev:
-            kmer = kmer_rev
-        
-        all_kmers.add(kmer)
-
-        if kmer in counter:
-            counter[kmer] += 1
-        else:
-            counter[kmer] = 1
-
-    return counter
+    with open(output_file, "w") as fo:
+        fo.write("sequence_id\t" + "\t".join(all_kmers_sorted) + "\n")
+        for seq_id, _ in records:  # preserve original order
+            if seq_id not in kmer_counts:
+                continue
+            seq_ids.append(seq_id)
+            total_kmers = sum(kmer_counts[seq_id].values())
+            line = [
+                kmer_counts[seq_id][kmer] / total_kmers if kmer in kmer_counts[seq_id] else 0
+                for kmer in all_kmers_sorted
+            ]
+            fo.write(seq_id + "\t" + "\t".join(map(str, line)) + "\n")
+            X.append(line)
 
 if __name__ == "__main__":
     main()
