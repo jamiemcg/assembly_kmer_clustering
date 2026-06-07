@@ -34,13 +34,20 @@ conda activate assembly_kmer_composition
 The python script `kmer_composition.py` counts kmers from sequences in FASTA format of a specified kmer length
 
 ```
-python kmer_composition.py [assembly.fasta] [kmer_length] [output_file]
+python kmer_composition.py -i <assembly.fasta> -k <kmer_length> -o <output_file> [-t <threads>]
 ```
+
+Where:
+
+- `-i, --input` (required): input FASTA file
+- `-k, --kmer-size` (required): kmer length
+- `-o, --output` (required): output TSV file
+- `-t, --threads` (optional): number of worker processes (default: 4)
 
 For example, to count the frequencies of kmers of length 4 and save them to a file called `tet.tsv`:
 
 ```
-python kmer_composition.py assembly.fasta 4 tet.tsv
+python kmer_composition.py -i assembly.fasta -k 4 -o tet.tsv
 ```
 
 **Plotting**
